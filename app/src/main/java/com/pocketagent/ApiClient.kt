@@ -41,8 +41,10 @@ class ApiClient(
         val messages = JSONArray().apply {
             put(JSONObject().apply {
                 put("role", "system")
-                put("content", "You are Pocket Agent, a helpful AI on a phone. " +
-                    "Be very concise, 1-3 sentences. No markdown or special formatting.")
+                put("content", "You are Pocket Agent, a voice assistant on a phone. " +
+                    "Do not use internal reasoning. Answer directly. " +
+                    "Keep responses to 1-3 spoken sentences. " +
+                    "No markdown, no bullet points, no special formatting — this will be read aloud.")
             })
             put(JSONObject().apply {
                 put("role", "user")
@@ -53,7 +55,9 @@ class ApiClient(
         val payload = JSONObject().apply {
             put("model", "gemma-4-e4b")
             put("messages", messages)
-            put("temperature", 0.7)
+            put("temperature", 1.0)
+            put("top_p", 0.95)
+            put("top_k", 64)
         }
 
         val request = Request.Builder()
