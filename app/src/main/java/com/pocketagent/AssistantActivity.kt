@@ -56,11 +56,8 @@ class AssistantActivity : ComponentActivity() {
             )
         }
 
-        // Auto-start if launched from side button
-        if (intent?.getBooleanExtra("auto_listen", false) == true ||
-            intent?.action == "android.intent.action.ASSIST") {
-            requestMicAndStart()
-        }
+        // Always auto-start listening on launch
+        requestMicAndStart()
     }
 
     private fun requestMicAndStart() {
@@ -82,7 +79,7 @@ class AssistantActivity : ComponentActivity() {
                 _response.value = ""
 
                 val audioFile = withContext(Dispatchers.IO) {
-                    recorder.recordToWav(File(cacheDir, "input.wav"), 6000)
+                    recorder.recordToWav(File(cacheDir, "input.wav"))
                 }
 
                 // Step 2: Transcribe
