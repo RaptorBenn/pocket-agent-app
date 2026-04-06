@@ -8,44 +8,49 @@ import java.io.DataOutputStream
 import java.io.File
 import java.io.FileOutputStream
 import kotlin.math.abs
+import kotlin.math.sqrt
 
 class AudioRecorder(private val sampleRate: Int = 16000) {
 
     /**
-     * Record audio with intelligent silence detection.
-     * Stops when silence is detected after speech, or after maxDurationMs.
+     * Record audio with adaptive silence detection using RMS energy.
+     *
+     * Phase 1 (first 500ms): Calibrate ambient noise floor
+     * Phase 2: Detect speech as RMS > noiseFloor * speechMultiplier
+     * Phase 3: Stop after silenceDurationMs of sub-threshold audio post-speech
      */
     fun recordToWav(
         outputFile: File,
-        maxDurationMs: Long = 15000,
-        silenceThreshold: Short = 800,
-        silenceDurationMs: Long = 1500,
-        minSpeechMs: Long = 500,
+        maxDurationMs: Long = 12000,
+        silenceDurationMs: Long = 1200,
+        speechMultiplier: Double = 3.0,
     ): File {
         val bufSize = AudioRecord.getMinBufferSize(
             sampleRate, AudioFormat.CHANNEL_IN_MONO, AudioFormat.ENCODING_PCM_16BIT
         )
         val recorder = AudioRecord(
-            MediaRecorder.AudioSource.MIC,
+            MediaRecorder.AudioSource.VOICE_RECOGNITION,
             sampleRate, AudioFormat.CHANNEL_IN_MONO,
             AudioFormat.ENCODING_PCM_16BIT, bufSize
         )
 
         val pcmData = ByteArrayOutputStream()
         val buffer = ByteArray(bufSize)
-        val shortBuffer = ShortArray(bufSize / 2)
 
         recorder.startRecording()
 
         val startTime = System.currentTimeMillis()
-        var lastSoundTime = startTime
+        var lastSpeechTime = 0L
         var hasSpeechStarted = false
+        var noiseFloor = 0.0
+        var calibrationSamples = 0
+        var calibrationSum = 0.0
+        val calibrationMs = 400L
 
         while (true) {
             val now = System.currentTimeMillis()
             val elapsed = now - startTime
 
-            // Hard max duration
             if (elapsed > maxDurationMs) break
 
             val read = recorder.read(buffer, 0, buffer.size)
@@ -53,29 +58,42 @@ class AudioRecorder(private val sampleRate: Int = 16000) {
 
             pcmData.write(buffer, 0, read)
 
-            // Analyze audio level for silence detection
-            val shortRead = read / 2
-            for (i in 0 until shortRead) {
-                shortBuffer[i] = ((buffer[i * 2 + 1].toInt() shl 8) or
-                    (buffer[i * 2].toInt() and 0xFF)).toShort()
+            // Calculate RMS energy of this chunk
+            val shortCount = read / 2
+            var sumSquares = 0.0
+            for (i in 0 until shortCount) {
+                val sample = ((buffer[i * 2 + 1].toInt() shl 8) or
+                    (buffer[i * 2].toInt() and 0xFF)).toShort().toDouble()
+                sumSquares += sample * sample
+            }
+            val rms = sqrt(sumSquares / shortCount)
+
+            // Phase 1: Calibrate noise floor from ambient sound
+            if (elapsed < calibrationMs) {
+                calibrationSum += rms
+                calibrationSamples++
+                noiseFloor = (calibrationSum / calibrationSamples).coerceAtLeast(200.0)
+                continue
             }
 
-            val maxAmplitude = shortBuffer.take(shortRead).maxOfOrNull { abs(it.toInt()) } ?: 0
+            val speechThreshold = noiseFloor * speechMultiplier
 
-            if (maxAmplitude > silenceThreshold) {
-                lastSoundTime = now
-                if (!hasSpeechStarted && elapsed > 200) {
+            if (rms > speechThreshold) {
+                lastSpeechTime = now
+                if (!hasSpeechStarted) {
                     hasSpeechStarted = true
                 }
             }
 
-            // Stop if we had speech and now silence for silenceDurationMs
-            if (hasSpeechStarted && (now - lastSoundTime) > silenceDurationMs) {
+            // Stop conditions
+            if (hasSpeechStarted && lastSpeechTime > 0 &&
+                (now - lastSpeechTime) > silenceDurationMs) {
+                // Speech happened, then silence — done
                 break
             }
 
-            // Also stop if no speech detected for 4 seconds (nobody talking)
-            if (!hasSpeechStarted && elapsed > 4000) {
+            if (!hasSpeechStarted && elapsed > 5000) {
+                // Nobody spoke for 5 seconds — give up
                 break
             }
         }
